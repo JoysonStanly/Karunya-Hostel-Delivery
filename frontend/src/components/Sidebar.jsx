@@ -1,13 +1,13 @@
 import React, { useContext } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { AuthContext } from '../context/AuthContext'
-import { Home, PlusSquare, Trophy, User, Flag, LayoutDashboard } from 'lucide-react'
+import { Home, PlusSquare, Trophy, User, LayoutDashboard } from 'lucide-react'
 
 const NavItem = ({ to, label, icon: Icon }) => {
   const location = useLocation()
   const active = location.pathname === to
   return (
-    <Link to={to} className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition hover:bg-gray-50 ${active ? 'bg-gray-100 text-gray-900' : 'text-gray-600'}`}>
+    <Link to={to} className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition hover:bg-gray-50 dark:hover:bg-slate-800 ${active ? 'bg-gray-100 dark:bg-slate-800 text-gray-900 dark:text-gray-100' : 'text-gray-600 dark:text-gray-400'}`}>
       <Icon size={18} />
       <span>{label}</span>
     </Link>
@@ -20,7 +20,6 @@ export default function Sidebar(){
 
   const common = [
     { to: '/profile', label: 'Profile', icon: User },
-    { to: '/report', label: 'Report', icon: Flag },
   ]
 
   const customer = [
@@ -42,13 +41,14 @@ export default function Sidebar(){
   if(user.role === 'admin') menu = [...admin, ...common]
 
   return (
-    <div className="w-64 bg-white border-r p-4 min-h-screen">
-      <div className="text-sm font-semibold mb-4">Hello, {user.name}</div>
+    <div className="sticky top-0 h-screen p-4 overflow-y-auto bg-white border-r-2 border-gray-300 dark:bg-slate-900 dark:border-slate-800 w-60">
+
       <nav className="flex flex-col gap-2">
         {menu.map(item => (
           <NavItem key={item.to} to={item.to} label={item.label} icon={item.icon} />
         ))}
       </nav>
+      
     </div>
   )
 }

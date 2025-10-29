@@ -1,77 +1,334 @@
 import React, { createContext, useState, useEffect } from 'react'
+import { authAPI, ordersAPI, messagesAPI, connectSocket, disconnectSocket, getSocket } from '../services/api'
+import toast from 'react-hot-toast'
 
 export const AuthContext = createContext()
 
-const dummyUsers = [
-  { id: 1, name: 'Alice', email: 'alice@example.com', role: 'customer', room: 'A101', phone: '9999999999' },
-  { id: 2, name: 'Bob', email: 'bob@example.com', role: 'delivery', room: 'B202', phone: '8888888888' },
-  { id: 3, name: 'Admin', email: 'admin@khd', role: 'admin', room: '', phone: '' }
-]
-
-const sampleOrders = [
-  { id: 'ord-1', title: 'Parcel - Books', type: 'parcel', price: 0, from: 'Main Gate', room: 'A101', customerId: 1, status: 'pending', assignedTo: null, createdAt: Date.now() - 1000*60*60 },
-  { id: 'ord-2', title: 'Food - Pizza', type: 'food', price: 50, from: 'Canteen', room: 'A101', customerId: 1, status: 'accepted', assignedTo: 2, createdAt: Date.now() - 1000*60*30 },
-]
-
 export function AuthProvider({ children }){
-  const [user, setUser] = useState(()=> JSON.parse(localStorage.getItem('khd_user')) || null)
-  const [users] = useState(dummyUsers)
-  const [orders, setOrders] = useState(()=> JSON.parse(localStorage.getItem('khd_orders')) || sampleOrders)
-  const [reports, setReports] = useState(()=> JSON.parse(localStorage.getItem('khd_reports')) || [])
-
-  useEffect(()=>{
-    localStorage.setItem('khd_user', JSON.stringify(user))
-  }, [user])
-  useEffect(()=>{
-    localStorage.setItem('khd_orders', JSON.stringify(orders))
-  }, [orders])
-  useEffect(()=>{
-    localStorage.setItem('khd_reports', JSON.stringify(reports))
-  }, [reports])
-
-  function login(email, password, role){
-    const found = users.find(u=> u.email === email && u.role === role)
-    if(found){
-      setUser(found)
-      return { ok: true }
+  const [user, setUser] = useState(()=> {
+    const storedUser = localStorage.getItem('khd_user')
+    if (!storedUser || storedUser === 'undefined' || storedUser === 'null') {
+      return null
     }
-    return { ok: false, error: 'User not found (dummy auth)' }
+    try {
+      return JSON.parse(storedUser)
+    } catch (error) {
+      console.error('Error parsing user from localStorage:', error)
+      localStorage.removeItem('khd_user')
+      return null
+    }
+  })
+  const [orders, setOrders] = useState([])
+  const [messages, setMessages] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [initializing, setInitializing] = useState(true)
+
+  // Initialize authentication state
+  useEffect(() => {
+    const initializeAuth = async () => {
+      const token = localStorage.getItem('khd_token')
+      const storedUserData = localStorage.getItem('khd_user')
+      
+      let storedUser = null
+      if (storedUserData && storedUserData !== 'undefined' && storedUserData !== 'null') {
+        try {
+          storedUser = JSON.parse(storedUserData)
+        } catch (error) {
+          console.error('Error parsing stored user data:', error)
+          localStorage.removeItem('khd_user')
+        }
+      }
+      
+      if (token && storedUser) {
+        // Set user immediately from localStorage for faster load
+        setUser(storedUser)
+        // Set initializing to false immediately so UI doesn't redirect
+        setInitializing(false)
+        
+        try {
+          // Verify token is still valid by getting current user (in background)
+          const response = await authAPI.getCurrentUser()
+          if (response.success) {
+            // Backend returns 'data' field, not 'user'
+            const userData = response.data || response.user
+            if (userData) {
+              setUser(userData)
+              // Update stored user data in case it changed
+              localStorage.setItem('khd_user', JSON.stringify(userData))
+            }
+          } else {
+            // Token is invalid, clear everything
+            localStorage.removeItem('khd_token')
+            localStorage.removeItem('khd_user')
+            setUser(null)
+          }
+        } catch (error) {
+          // Network error or backend down - keep user logged in from localStorage
+          console.log('Could not verify token (backend may be down), using cached user data:', error.message)
+          // Only clear if it's a 401 (unauthorized) error
+          if (error.status === 401 || error.message?.includes('401')) {
+            localStorage.removeItem('khd_token')
+            localStorage.removeItem('khd_user')
+            setUser(null)
+          }
+          // For other errors (network, 500, etc.), keep the user logged in
+        }
+      } else {
+        setUser(null)
+        setInitializing(false)
+      }
+    }
+
+    initializeAuth()
+  }, [])
+
+  // Connect socket when user is logged in
+  useEffect(() => {
+    if (user) {
+      connectSocket()
+      fetchOrders()
+    } else {
+      disconnectSocket()
+    }
+  }, [user])
+
+  // Socket event listeners
+  useEffect(() => {
+    const socket = getSocket()
+    if (socket) {
+      // Listen for new messages
+      socket.on('newMessage', (message) => {
+        setMessages(prev => ({
+          ...prev,
+          [message.orderId]: [...(prev[message.orderId] || []), message]
+        }))
+      })
+
+      // Listen for order updates
+      socket.on('orderStatusUpdate', (orderUpdate) => {
+        setOrders(prev => prev.map(order => 
+          order._id === orderUpdate.orderId 
+            ? { ...order, ...orderUpdate.data }
+            : order
+        ))
+        toast.success(`Order status updated: ${orderUpdate.data.status}`)
+      })
+
+      // Listen for new orders (for delivery students)
+      socket.on('newOrder', (order) => {
+        if (user?.role === 'delivery') {
+          setOrders(prev => [order, ...prev])
+          toast.success('New order available!')
+        }
+      })
+
+      return () => {
+        socket.off('newMessage')
+        socket.off('orderStatusUpdate')
+        socket.off('newOrder')
+      }
+    }
+  }, [user])
+
+  // Fetch orders from API
+  const fetchOrders = async () => {
+    try {
+      const response = await ordersAPI.getOrders()
+      if (response.success) {
+        setOrders(response.data || response.orders || [])
+      }
+    } catch (error) {
+      console.error('Failed to fetch orders:', error)
+    }
   }
 
-  function logout(){
-    setUser(null)
+  // Login function
+  async function login(email, password, role){
+    setLoading(true)
+    try {
+      const response = await authAPI.login(email, password, role)
+      if (response.success) {
+        setUser(response.user)
+        toast.success('Login successful!')
+        return { ok: true }
+      }
+      return { ok: false, error: response.message }
+    } catch (error) {
+      const errorMessage = error.message || 'Login failed'
+      toast.error(errorMessage)
+      return { ok: false, error: errorMessage }
+    } finally {
+      setLoading(false)
+    }
   }
 
-  function register({ name, email, password, role, room, phone }){
-    const id = users.length + Math.floor(Math.random()*1000)
-    const newUser = { id, name, email, role, room, phone }
-    // in dummy mode we won't persist users list beyond session
-    setUser(newUser)
-    return { ok: true }
+  // Logout function
+  async function logout(){
+    setLoading(true)
+    try {
+      await authAPI.logout()
+      setUser(null)
+      setOrders([])
+      setMessages({})
+      toast.success('Logged out successfully')
+    } catch (error) {
+      console.error('Logout error:', error)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  function createOrder(order){
-    const newOrder = { ...order, id: 'ord-' + Date.now(), status: 'pending', assignedTo: null, createdAt: Date.now() }
-    setOrders(prev=> [newOrder, ...prev])
-    return newOrder
+  // Register function
+  async function register(userData){
+    setLoading(true)
+    try {
+      const response = await authAPI.register(userData)
+      if (response.success) {
+        setUser(response.user)
+        toast.success('Registration successful!')
+        return { ok: true }
+      }
+      return { ok: false, error: response.message }
+    } catch (error) {
+      const errorMessage = error.message || 'Registration failed'
+      toast.error(errorMessage)
+      return { ok: false, error: errorMessage }
+    } finally {
+      setLoading(false)
+    }
   }
 
-  function acceptOrder(orderId, deliveryUserId){
-    setOrders(prev=> prev.map(o=> o.id === orderId ? { ...o, status: 'accepted', assignedTo: deliveryUserId } : o))
+  // Create order function
+  async function createOrder(orderData){
+    setLoading(true)
+    try {
+      const response = await ordersAPI.createOrder(orderData)
+      if (response.success) {
+        await fetchOrders() // Refresh orders list
+        toast.success('Order created successfully!')
+        return response.order
+      }
+      throw new Error(response.message)
+    } catch (error) {
+      const errorMessage = error.message || 'Failed to create order'
+      toast.error(errorMessage)
+      throw error
+    } finally {
+      setLoading(false)
+    }
   }
 
-  function completeOrder(orderId){
-    setOrders(prev=> prev.map(o=> o.id === orderId ? { ...o, status: 'delivered' } : o))
+  // Accept order function
+  async function acceptOrder(orderId){
+    setLoading(true)
+    try {
+      const response = await ordersAPI.acceptOrder(orderId)
+      if (response.success) {
+        await fetchOrders() // Refresh orders list
+        toast.success('Order accepted successfully!')
+        return response.order
+      }
+      throw new Error(response.message)
+    } catch (error) {
+      const errorMessage = error.message || 'Failed to accept order'
+      toast.error(errorMessage)
+      throw error
+    } finally {
+      setLoading(false)
+    }
   }
 
-  function submitReport(report){
-    const r = { id: 'rep-'+Date.now(), ...report, createdAt: Date.now(), status: 'open' }
-    setReports(prev=> [r, ...prev])
-    return r
+  // Complete order function
+  async function completeOrder(orderId, otp){
+    setLoading(true)
+    try {
+      console.log('CompleteOrder called with:', { orderId, otp: otp ? '****' : 'null' })
+      const response = await ordersAPI.updateOrderStatus(orderId, 'delivered', null, otp)
+      console.log('Complete order response:', response)
+      if (response.success) {
+        await fetchOrders() // Refresh orders list
+        toast.success('Order marked as delivered!')
+        return response.order
+      }
+      throw new Error(response.message)
+    } catch (error) {
+      console.error('Complete order error:', error)
+      const errorMessage = error.message || error.data?.message || 'Failed to complete order'
+      toast.error(errorMessage)
+      throw error
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Add message function
+  async function addMessage(orderId, content, type = 'text'){
+    try {
+      const response = await messagesAPI.sendMessage(orderId, content, type)
+      if (response.success) {
+        // Socket will handle real-time update, but also update local state
+        const newMessage = response.data || response.message
+        setMessages(prev => ({
+          ...prev,
+          [orderId]: [...(prev[orderId] || []), newMessage]
+        }))
+        return newMessage
+      }
+      throw new Error(response.message)
+    } catch (error) {
+      const errorMessage = error.message || 'Failed to send message'
+      toast.error(errorMessage)
+      throw error
+    }
+  }
+
+  // Get messages function
+  function getMessages(orderId){
+    return messages[orderId] || []
+  }
+
+  // Fetch messages for an order
+  async function fetchMessages(orderId){
+    try {
+      const response = await messagesAPI.getMessages(orderId)
+      if (response.success) {
+        setMessages(prev => ({
+          ...prev,
+          [orderId]: response.data || response.messages || []
+        }))
+        return response.data || response.messages || []
+      }
+      return []
+    } catch (error) {
+      console.error('Failed to fetch messages:', error)
+      return []
+    }
+  }
+
+  // Check if user can access chat
+  function canAccessChat(orderId, userId){
+    const order = orders.find(o => o._id === orderId || o.id === orderId)
+    if (!order) return false
+    
+    // Customer can access if they created the order
+    if (order.customer && (order.customer._id === userId || order.customer === userId)) return true
+    
+    // Delivery student can access if assigned to order
+    if (order.assignedTo && (order.assignedTo._id === userId || order.assignedTo === userId)) return true
+    
+    // Admin can access all chats
+    if (user?.role === 'admin') return true
+    
+    return false
   }
 
   return (
-    <AuthContext.Provider value={{ user, users, orders, reports, login, logout, register, createOrder, acceptOrder, completeOrder, submitReport, setUser }}>
+    <AuthContext.Provider value={{ 
+      user, orders, messages, loading, initializing,
+      login, logout, register, createOrder, acceptOrder, completeOrder, 
+      setUser, addMessage, getMessages, fetchMessages, canAccessChat,
+      fetchOrders
+    }}>
       {children}
     </AuthContext.Provider>
   )

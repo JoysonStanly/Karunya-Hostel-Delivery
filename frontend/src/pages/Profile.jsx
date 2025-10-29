@@ -25,23 +25,25 @@ export default function Profile(){
       <div className="flex pb-16 md:pb-0">
         <div className="hidden md:block"><Sidebar /></div>
         <div className="flex-1 p-4 md:p-6">
-          <h1 className="text-2xl font-semibold mb-4">Profile</h1>
+          <h1 className="text-2xl font-semibold mb-6 text-center">Profile</h1>
           
-          {saved && (
-            <div className="mb-4 p-3 bg-green-50 text-green-700 border border-green-200 rounded-xl max-w-md">Profile updated!</div>
-          )}
-          
-          <div className="max-w-md">
-            <form onSubmit={save} className="space-y-4 card p-5">
-              <InputField label="Name" value={name} onChange={e=> setName(e.target.value)} />
-              <InputField label="Email" value={user.email} disabled className="bg-gray-100" />
-              <InputField label="Role" value={user.role} disabled className="bg-gray-100" />
-              <InputField label="Room No." value={room} onChange={e=> setRoom(e.target.value)} />
-              <InputField label="Phone" value={phone} onChange={e=> setPhone(e.target.value)} />
-              <div className="pt-2">
-                <Button type="submit" size="lg">Save Changes</Button>
-              </div>
-            </form>
+          <div className="flex justify-center items-start min-h-[calc(100vh-200px)]">
+            <div className="w-full max-w-md">
+              {saved && (
+                <div className="mb-4 p-3 bg-green-50 text-green-700 border border-green-200 rounded-xl">Profile updated!</div>
+              )}
+              
+              <form onSubmit={save} className="space-y-4 card p-6 shadow-lg">
+                <InputField label="Name" value={name} onChange={e=> setName(e.target.value)} />
+                <InputField label="Email" value={user.email} disabled className="bg-gray-100 dark:bg-slate-800" />
+                <InputField label="Role" value={user.role} disabled className="bg-gray-100 dark:bg-slate-800" />
+                <InputField label="Room No." value={room} onChange={e=> setRoom(e.target.value)} />
+                <InputField label="Phone" value={phone} onChange={e=> setPhone(e.target.value)} />
+                <div className="pt-2">
+                  <Button type="submit" size="lg">Save Changes</Button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       </div>
